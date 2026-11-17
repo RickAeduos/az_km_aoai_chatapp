@@ -1,179 +1,92 @@
 import os
+from urllib.parse import urlsplit
+
 import streamlit as st
-from openai import AzureOpenAI
+from azure.core.exceptions import AzureError
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+from openai import APIConnectionError, APIStatusError, OpenAI
 
-# ページタイトルとアイコンを設定する。
 st.set_page_config(page_title="Custom ChatGPT", page_icon="💬", layout="wide")
+st.title("Azure OpenAI ChatGPT サンプルアプリケーション")
 
-# タイトルを表示する。
-st.markdown("# Azure OpenAI ChatGPT サンプルアプリケーション")
+deployment = os.getenv("OPENAI_DEPLOYMENT", "").strip() or "gpt-4.1-mini"
+endpoint = os.getenv("OPENAI_API_ENDPOINT", "").strip().rstrip("/")
 
-# サイドバーに説明を表示する。
 st.sidebar.header("ChatGPT Demo")
-st.sidebar.markdown(
-    "Azure OpenAIのChatGPT APIを使ったWebアプリケーションのサンプル画面です。"
-)
-
-# Azure OpenAIへの接続情報を設定する。※適宜編集してください
-deployment = os.getenv("OPENAI_DEPLOYMENT", "")
-base = os.getenv("OPENAI_API_ENDPOINT", "")
-api_version = os.getenv("OPENAI_API_VERSION", "")  # "2024-10-21"
-
-st.sidebar.text(f"Endpoint: {base}")
-st.sidebar.text(f"API Ver: {api_version}")
 st.sidebar.text(f"Deployment: {deployment}")
-
-# Managed IDでのトークン取得
-token_provider = get_bearer_token_provider(
-    DefaultAzureCredential(), "https://cognitiveservices.azure.com/.default"
-)
-
-client = AzureOpenAI(
-    azure_endpoint=base, azure_ad_token_provider=token_provider, api_version=api_version
-)
-
-# チャットの吹き出しスタイル、マークダウンのCSS
-CSS = """
-<style>
- /* チャットの吹き出しスタイル */
- .chat-bubble {
-    display: inline-block;
-    margin-bottom: 5px; padding: 5px 10px;
-    border-radius: 25px; clear: both; }
-
-.user { background-color: #DCF8C6; float: right; color: black; }
-
-.assistant { background-color: #E5E5EA; float: left; color: black;}
-
-code {
-  background-color: black;
-  color: white;
-  display: block;
-  padding: 0.5rem;
-  overflow-x: auto;
-  font-family: monospace, monospace;
-  font-size: 0.9rem;
-  line-height: 1.2;
-  border-radius: 0.25rem;
-}
-
-pre code {
-  background-color: black;
-  color: white;
-  padding: 0;
-  overflow: visible;
-  overflow-x: auto;
-  font-size: inherit;
-  line-height: inherit;
-}
-
-pre {
-  background-color: black;
-  color: white;
-  padding: 0;
-  overflow: visible;
-  overflow-x: auto;
-  font-size: inherit;
-  line-height: inherit;
-}
-
-@media (prefers-color-scheme: dark) {
-  code {
-    color: white;
-  }
-  pre code {
-    color: white;
-  }
-  pre {
-    color: white;
-  }
-}
- </style>
-"""
-
-# CSSをStreamlitに適用
-st.markdown(CSS, unsafe_allow_html=True)
-
-
-# 3つのセッションステートを作成する。
-if "generated" not in st.session_state:
-    st.session_state["generated"] = []
-
-if "past" not in st.session_state:
-    st.session_state["past"] = []
-
-if "conversation" not in st.session_state:
-    st.session_state["conversation"] = []
-
-# クリアボタンを押した場合、チャットをクリアする。
-if st.sidebar.button("Clear Chat"):
-    st.session_state["generated"] = []
-    st.session_state["past"] = []
-    st.session_state["conversation"] = []
-    st.session_state["input"] = ""
-
-# サイドバーでパラメータを設定する
 st.sidebar.markdown("ChatGPTのパラメータ設定")
-Temperature_temp = st.sidebar.slider("Temperature(温度)", 0.0, 1.0, 0.7, 0.01)
-MaxTokens_temp = st.sidebar.slider("Max_Tokens(最大応答トークン数)", 0, 16384, 500, 1)
-top_p_temp = st.sidebar.slider("Top_p(上位P)", 0.0, 1.0, 0.9, 0.01)
-
-# Systemの役割を定義する。入力ボックスで指定する
-SystemRole = st.sidebar.text_area(
-    "System Role(システムの役割)",
+temperature = st.sidebar.slider("Temperature (温度)", 0.0, 1.0, 0.7, 0.01)
+max_tokens = st.sidebar.slider("最大応答トークン数", 1, 16384, 500)
+top_p = st.sidebar.slider("Top P", 0.0, 1.0, 0.9, 0.01)
+system_prompt = st.sidebar.text_area(
+    "System Role (システムの役割)",
     "あなたは優秀な助手です。丁寧に質問や相談に回答してください",
-)
+).strip()
 
-# Systemの役割をsession_stateに追加する
-if SystemRole:
-    st.session_state.conversation.append({"role": "system", "content": SystemRole})
+conversation = st.session_state.setdefault("conversation", [])
+if st.sidebar.button("Clear Chat"):
+    conversation.clear()
 
-# ユーザの入力ボックス
-user_input = st.text_area("You: ", "", key="input")
+history = [
+    message
+    for message in conversation
+    if message["role"] in ("user", "assistant") and message["content"]
+]
+for message in history:
+    with st.chat_message(message["role"]):
+        st.markdown(message["content"])
 
+parsed_endpoint = urlsplit(endpoint)
+if (
+    parsed_endpoint.scheme != "https"
+    or not parsed_endpoint.hostname
+    or parsed_endpoint.path not in ("", "/openai/v1")
+    or parsed_endpoint.query
+    or parsed_endpoint.fragment
+):
+    st.error("OPENAI_API_ENDPOINT に Azure OpenAI リソースの HTTPS URL を設定してください。")
+    st.stop()
 
-# 入力ボックスのクリア
-def clear_text():
-    st.session_state.input = ""
+base_url = endpoint if parsed_endpoint.path else f"{endpoint}/openai/v1"
+prompt = st.chat_input("質問を入力してください")
+if not prompt or not prompt.strip():
+    st.stop()
 
+user_message = {"role": "user", "content": prompt.strip()}
+messages = []
+if system_prompt:
+    messages.append({"role": "system", "content": system_prompt})
+messages.extend(history)
+messages.append(user_message)
 
-st.button("Clear text input", on_click=clear_text)
-st.write("")
+with st.chat_message("user"):
+    st.markdown(user_message["content"])
 
-# ユーザの入力があった場合、conversationに追加する。
-st.session_state.conversation.append({"role": "user", "content": user_input})
-
-# ユーザの入力があった場合、ChatGPT APIを呼び出す。
-if user_input:
-    output = client.chat.completions.create(
-        model=deployment,
-        messages=st.session_state.conversation,
-        temperature=Temperature_temp,
-        max_tokens=MaxTokens_temp,
-        top_p=top_p_temp,
-        frequency_penalty=0,
-        presence_penalty=0,
-    )
-
-    # ChatGPTからの返答をconversationに追加する。
-    st.session_state.conversation.append(
-        {"role": "assistant", "content": output.choices[0].message.content}
-    )
-    # ユーザからの入力をpastに追加する。
-    st.session_state.past.append(user_input)
-    # ChatGPTからの返答をgeneratedに追加する。
-    st.session_state.generated.append(output.choices[0].message.content)
-
-# generatedが存在する場合、メッセージを表示する。
-if st.session_state["generated"]:
-    for i in range(len(st.session_state["generated"]) - 1, -1, -1):
-        if st.session_state["past"][i]:
-            st.markdown(
-                f'<div class="chat-bubble assistant">{st.session_state["generated"][i]} </div>',
-                unsafe_allow_html=True,
+try:
+    with DefaultAzureCredential() as credential:
+        token_provider = get_bearer_token_provider(credential, "https://ai.azure.com/.default")
+        with OpenAI(
+            base_url=base_url, api_key=token_provider, timeout=60.0, max_retries=1
+        ) as client:
+            response = client.chat.completions.create(
+                model=deployment,
+                messages=messages,
+                max_completion_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
             )
-            st.markdown(
-                f'<div class="chat-bubble user">{st.session_state["past"][i]} </div>',
-                unsafe_allow_html=True,
-            )
+except APIStatusError as error:
+    st.error(f"Azure OpenAI の呼び出しに失敗しました (HTTP {error.status_code})。")
+    st.stop()
+except (APIConnectionError, AzureError):
+    st.error("Azure OpenAI に接続できませんでした。エンドポイントと認証設定を確認してください。")
+    st.stop()
+
+answer = response.choices[0].message.content if response.choices else None
+if not answer:
+    st.warning("モデルから表示できるテキストが返りませんでした。")
+    st.stop()
+
+conversation.extend([user_message, {"role": "assistant", "content": answer}])
+with st.chat_message("assistant"):
+    st.markdown(answer)

@@ -1,45 +1,38 @@
 # Simple ChatGPT client
-It is a Python application that serves as the frontend for Azure Open AI's ChatGPT.
-It is assumed to be deployed on Azure App Service.
 
-![image](https://github.com/07JP27/openai-client/assets/11060273/39fe32fd-3046-431a-8d39-36d64130faa8)
+A Streamlit chat app for Azure OpenAI `gpt-4.1-mini`, hosted on Azure App Service. It uses the Azure OpenAI v1 Chat Completions API and Microsoft Entra authentication.
 
-# 1. Deploy App Service
-Deploy Python Stack Web Apps
+## 1. Create an Azure Web App and grant access
 
-# 2.Deploy this application
-Web Apps > Deployment Center > Setting
-- Source : External Git
-- Repository : https://github.com/07JP27/az_km_aoai_chatapp/
-- Branch : main
-- Repository Type : Public
+Create a Linux Web App with Python 3.12. Enable its system-assigned managed identity on the **Identity** page. In **Access control (IAM)** on the Azure OpenAI resource that hosts your `gpt-4.1-mini` deployment, give the Web App identity the **Cognitive Services OpenAI User** role.
 
-![image](https://github.com/07JP27/openai-client/assets/11060273/ddb1893c-6384-47a2-bf17-ebe7b90e2139)
+To restrict access to the chat page, configure Microsoft Entra sign-in under the Web App's **Authentication** settings. [App Service authentication guide](https://learn.microsoft.com/azure/app-service/scenario-secure-app-authentication-app-service)
 
-And click Save button.
+## 2. Configure the Web App
 
-# 3.Set startup command
-Web Apps > Configuration > General settings > Startup Command
+Under **Settings → Environment variables → App settings**, add these settings and apply the changes.
 
+| Name | Value |
+| --- | --- |
+| `OPENAI_API_ENDPOINT` | The Azure OpenAI resource URL, such as `https://<resource>.openai.azure.com`. The full v1 base URL ending in `/openai/v1/` also works. |
+| `OPENAI_DEPLOYMENT` | The model's **deployment name** in Foundry. The default is `gpt-4.1-mini`. Set this to the actual deployment name if you picked a different one, such as `chat-mini`. |
+| `SCM_DO_BUILD_DURING_DEPLOYMENT` | `true` for installing Python dependencies during ZIP deployment. |
+
+The v1 API uses the endpoint path for versioning. You can remove the old `OPENAI_API_VERSION` setting.
+
+## 3. Deploy the application
+
+Clone this fork and run the following from its root in Bash. Sign in with `az login` first, and substitute your resource group and Web App name.
+
+```bash
+RG='rg-simple-chatgpt'
+APP='your-web-app-name'
+
+az webapp config set -g "$RG" -n "$APP" \
+  --startup-file 'python -m streamlit run app.py --server.port 8000 --server.address 0.0.0.0'
+
+python -m zipfile -c chatapp.zip app.py requirements.txt
+az webapp deploy -g "$RG" -n "$APP" --src-path chatapp.zip --type zip
 ```
-python -m streamlit run app.py --server.port 8000 --server.address 0.0.0.0
-```
 
-![image](https://github.com/07JP27/openai-client/assets/11060273/32fe52a8-15d6-40e2-80ea-10dae3e6457b)
-
-And click Save button.
-
-# 4. Set Enviroment variables
-Web Apps > Configuration > Application settings
-
-- OPENAI_API_ENDPOINT : Your Azure Open AI API endpoint URL
-- OPENAI_API_VERSION : API Version (2024-10-21)
-- OPENAI_DEPLOYMENT : The model name you deployed
-
-![image](https://github.com/07JP27/openai-client/assets/11060273/a34ffd2d-f044-4202-be09-fe04ad6f7c79)
-
-And click Save button.
-
-# Access and Enjoy your private ChatGPT!
-If you want to set up authentication to client app, Please refer to following document.
-https://learn.microsoft.com/azure/app-service/scenario-secure-app-authentication-app-service
+Open the **Default domain** on the Web App's **Overview** page. Send an initial question and then a follow-up to verify the conversation history.
