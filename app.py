@@ -64,7 +64,7 @@ with st.chat_message("user"):
 
 try:
     with DefaultAzureCredential() as credential:
-        token_provider = get_bearer_token_provider(credential, "https://ai.azure.com/.default")
+        token_provider = get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
         with OpenAI(
             base_url=base_url, api_key=token_provider, timeout=60.0, max_retries=1
         ) as client:
